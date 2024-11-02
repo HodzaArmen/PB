@@ -1,0 +1,231 @@
+-- 1. NALOGA
+DROP TABLE IF EXISTS naselje;
+DROP TABLE IF EXISTS igralec;
+DROP TABLE IF EXISTS aliansa;
+DROP TABLE IF EXISTS pleme;
+CREATE TABLE pleme(
+  tid integer default 0 NOT NULL,
+  tribe varchar(100) default '' NOT NULL,
+  PRIMARY KEY (tid)
+);
+CREATE TABLE aliansa(
+  aid integer default 0 NOT NULL,
+  alliance varchar(100) default '',
+  PRIMARY KEY (aid)
+);
+CREATE TABLE igralec(
+  pid integer default 0 NOT NULL,
+  player varchar(100) default '' NOT NULL,
+  tid integer default 0 NOT NULL,
+  aid integer default 0 NOT NULL,
+  PRIMARY KEY (pid),
+  FOREIGN KEY (tid) REFERENCES pleme(tid),
+  FOREIGN KEY (aid) REFERENCES aliansa(aid)
+);
+CREATE TABLE naselje(
+  id integer default 0 NOT NULL,
+  vid integer default 0 NOT NULL,
+  village varchar(100) default '' NOT NULL,
+  x integer default 0 NOT NULL,
+  y integer default 0 NOT NULL,
+  population integer default 0 NOT NULL,
+  pid integer default 0 NOT NULL,
+  PRIMARY KEY (id),
+  FOREIGN KEY (pid) REFERENCES igralec(pid)
+);
+
+INSERT INTO pleme VALUES(1,'Rimljani');
+INSERT INTO pleme VALUES(2,'Tevtoni');
+INSERT INTO pleme VALUES(3,'Galci');
+INSERT INTO pleme VALUES(4,'Narava');
+INSERT INTO pleme VALUES(5,'Natarji');
+INSERT INTO pleme VALUES(6,'Egipčani');
+INSERT INTO pleme VALUES(7,'Huni');		
+INSERT INTO aliansa SELECT DISTINCT aid, alliance FROM x_world;
+INSERT INTO igralec SELECT DISTINCT pid, player, tid, aid FROM x_world;
+INSERT INTO naselje SELECT DISTINCT id, vid, village, x, y, population, pid FROM x_world;
+
+
+-- 2. NALOGA
+-- a)
+CREATE VIEW x_view 
+AS
+SELECT n.id AS id, n.x AS x, n.y AS y, p.tid AS tid, n.vid AS vid, n.village AS village, i.pid AS pid,
+i.player AS player, a.aid AS aid, a.alliance AS alliance, n.population AS population
+FROM naselje n
+JOIN igralec i ON n.pid = i.pid
+JOIN pleme p ON i.tid = p.tid
+JOIN aliansa a ON i.aid = a.aid;
+
+
+-- b)
+SELECT * FROM x_view
+EXCEPT
+SELECT * FROM x_world;
+
+-- c)
+CREATE TABLE top5 (
+  alliance VARCHAR(100),
+  SteviloNaselij INTEGER DEFAULT 0 NOT NULL,
+  PRIMARY KEY (alliance)
+);
+
+
+-- Napolnim tabelo
+INSERT INTO top5 (alliance, SteviloNaselij)
+SELECT a.alliance, COUNT(*) AS SteviloNaselij
+FROM naselje n
+JOIN igralec i ON n.pid = i.pid
+JOIN aliansa a ON i.aid = a.aid
+WHERE alliance != ''
+GROUP BY a.alliance
+ORDER BY COUNT(*) DESC
+LIMIT 5;
+
+DELIMITER //
+CREATE TRIGGER prozilec_top5
+AFTER INSERT ON naselje
+FOR EACH ROW
+BEGIN
+  -- Izbrisi vse vrstice iz tabele top5
+  DELETE FROM top5;
+  -- Ponovno vstavi podatke v tabelo top5
+  INSERT INTO top5 (alliance, SteviloNaselij)
+	SELECT a.alliance, COUNT(*) AS SteviloNaselij
+	FROM naselje n
+	JOIN igralec i ON n.pid = i.pid
+	JOIN aliansa a ON i.aid = a.aid
+	WHERE alliance != ''
+	GROUP BY a.alliance
+	ORDER BY COUNT(*) DESC
+	LIMIT 5;
+END;
+//
+DELIMITER ;
+
+
+
+-- 3. NALOGA
+-- a) Kateri igralec ima največje naselje? 
+-- Če dve osebi imata isto veliko populacijo, ta poizvedba vrne samo eno osebo
+SELECT i.player, MAX(n.population) AS Najvecje_naselje
+FROM igralec i
+JOIN naselje n ON i.pid = n.pid
+GROUP BY i.player
+ORDER BY največje_naselje DESC
+LIMIT 1;
+
+-- Tukaj je rešitev za zgornji problem
+SELECT i.player, n.population
+FROM igralec i
+JOIN naselje n ON i.pid = n.pid
+where n.population = (
+	SELECT MAX(population) AS Najvecje_naselje
+	FROM naselje
+);
+
+-- b) Koliko igralcev ima nadpovprečno veliko naselje? 
+SELECT COUNT(*) AS Stevilo
+FROM (
+    	SELECT i.player
+    	FROM igralec i
+    	JOIN naselje n ON i.pid = n.pid
+    	GROUP BY i.player
+    	HAVING AVG(n.population) > (SELECT AVG(population) FROM naselje)
+) AS nadpovprecni_igralci;
+
+-- c) Izpišite podatke o vseh naseljih igralcev brez alianse, urejeno padajoče po x in nato y koordinati. 
+SELECT i.player, n.*
+FROM naselje n
+JOIN igralec i ON n.pid = i.pid
+WHERE i.aid = ''
+ORDER BY n.x DESC, n.y DESC;
+
+-- d) Katero pleme je najštevilčnejše (glede na populacijo)? 
+SELECT p.tid, p.tribe, SUM(n.population) AS Skupna_populacija
+FROM pleme p
+JOIN igralec i ON p.tid = i.tid
+JOIN naselje n ON i.pid = n.pid
+GROUP BY p.tid
+ORDER BY skupna_populacija DESC
+LIMIT 1;
+
+-- e) Izpišite število nadpovprečno močnih alians (povprečje populacije računajte glede na alianse, ne na vse igralce). 
+SELECT COUNT(*) AS Stevilo
+FROM (
+    SELECT a.alliance
+    FROM aliansa a
+    JOIN igralec i ON a.aid = i.aid
+    JOIN naselje n ON i.pid = n.pid
+    GROUP BY a.aid
+    HAVING AVG(n.population) > (SELECT AVG(population) FROM naselje)
+) AS nadpovprecne_alianse;
+
+-- f) *Igralec bananamen želi preimenovati vsa svoja naselja na naslednji način. Uredil jih bo po populaciji, najmočnejše bo »Banana-00«, naslednje »Banana-01« in tako dalje.
+SET @st := -1; 	-- spremenljivka
+UPDATE naselje n
+JOIN igralec i ON n.pid = i.pid
+SET n.village = CONCAT('Banana-', LPAD(@st := @st + 1, 2, '0'))
+WHERE i.player = 'bananamen'
+ORDER BY n.population DESC;
+
+-- g) Napišite shranjen podprogram, ki za poljubne koordinate (parametra x in y) vrne populacijo na največ podani razdalji (parameter razdalja). Npr. razdalja 10 pomeni vse koordinate od vključno (x‐10, y‐10) do (x+10, y+10). Za preverjanje robnih pogojev (koordinate izven [‐400,400] po potrebi uporabite IF stavek.
+DELIMITER //
+CREATE PROCEDURE PopulacijaNaPodaniRazdalji(x INTEGER, y INTEGER, razdalja INTEGER)
+BEGIN
+    DECLARE x_min INT;
+    DECLARE x_max INT;
+    DECLARE y_min INT;
+    DECLARE y_max INT;
+
+    IF x < -400 THEN
+      SET x = -400;
+	  ELSEIF x > 400 THEN
+      SET x = 400;
+    END IF;
+    
+    IF y < -400 THEN
+      SET y = -400;
+    ELSEIF y > 400 THEN
+      SET y = 400;
+    END IF;
+
+    SET x_min = GREATEST(-400, x - razdalja);
+    SET x_max = LEAST(400, x + razdalja);
+    SET y_min = GREATEST(-400, y - razdalja);
+    SET y_max = LEAST(400, y + razdalja);
+
+    SELECT SUM(n.population) AS populacija
+    FROM naselje n
+    WHERE n.x BETWEEN x_min AND x_max AND n.y BETWEEN y_min AND y_max;
+END //
+DELIMITER ;
+
+-- h) Izpišite imena igralcev, ki imajo vsa svoja naselja na območju x, ki je med 100 in 200 in y, ki je med 0 in 100. 
+SELECT DISTINCT player
+FROM igralec
+WHERE pid NOT IN (
+    SELECT DISTINCT i.pid
+    FROM naselje n
+    JOIN igralec i ON n.pid = i.pid
+    WHERE n.x < 100 OR n.x > 200 OR n.y < 0 OR n.y > 100
+);
+
+-- i) Napišite poizvedbo, ki bo poiskala vsa naselja s populacijo točno 1000. Napišite še stavek, ki bi to poizvedbo pohitril, če bi bila tabela naselje dovolj velika. 
+SELECT *
+FROM naselje
+WHERE population = 1000;
+
+-- Kreiram indeks na atribut population, in s tem pohitrim poizvedbo
+CREATE INDEX index_population ON naselje(population);
+
+-- j) Poiščite igralce, ki imajo umirajoče naselje. Za umirajoče naselje vzemite tista naselja, ki imajo manj kot 3% povprečne populacije igralca (povprečna populacija igralca je populacija igralca ulomljeno s številom njegovih naselij).
+SELECT i.player
+FROM igralec i
+JOIN (
+  SELECT pid, AVG(population) AS povp
+  FROM naselje
+  GROUP BY pid
+) AS povprecje ON i.pid = povprecje.pid
+JOIN naselje n ON i.pid = n.pid
+WHERE n.population < 0.03 * povprecje.povp;
